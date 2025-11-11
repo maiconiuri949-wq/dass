@@ -1,0 +1,221 @@
+--[[ esp-lib.lua ]]--
+
+local esplib = getgenv().esplib
+if not esplib then
+    esplib = {
+        box = { enabled = true, type = "normal", padding = 1.15, fill = Color3.new(1,1,1), outline = Color3.new(0,0,0) },
+        healthbar = { enabled = true, fill = Color3.new(0,1,0), outline = Color3.new(0,0,0) },
+        name = { enabled = true, fill = Color3.new(1,1,1), size = 13 },
+        distance = { enabled = true, fill = Color3.new(1,1,1), size = 13 },
+        tracer = { enabled = true, fill = Color3.new(1,1,1), outline = Color3.new(0,0,0), from = "mouse" },
+        show_dead = true
+    }
+    getgenv().esplib = esplib
+end
+
+local espinstances = {}
+local espfunctions = {}
+
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local camera = workspace.CurrentCamera
+
+local INTERPOLATION_SPEED = 0.08
+
+local function get_bounding_box(instance)
+    local min, max = Vector2.new(math.huge, math.huge), Vector2.new(-math.huge, -math.huge)
+    local onscreen = false
+
+    local function process_part(p)
+        local size = (p.Size / 2) * (esplib.box.padding or 1)
+        local cf = p.CFrame
+        for _, offset in ipairs({
+            Vector3.new( size.X,  size.Y,  size.Z), Vector3.new(-size.X,  size.Y,  size.Z),
+            Vector3.new( size.X, -size.Y,  size.Z), Vector3.new(-size.X, -size.Y,  size.Z),
+            Vector3.new( size.X,  size.Y, -size.Z), Vector3.new(-size.X,  size.Y, -size.Z),
+            Vector3.new( size.X, -size.Y, -size.Z), Vector3.new(-size.X, -size.Y, -size.Z),
+        }) do
+            local pos, visible = camera:WorldToViewportPoint(cf:PointToWorldSpace(offset))
+            if visible then
+                local v2 = Vector2.new(pos.X, pos.Y)
+                min = min:Min(v2)
+                max = max:Max(v2)
+                onscreen = true
+            end
+        end
+    end
+
+    if instance:IsA("Model") then
+        for _, p in ipairs(instance:GetChildren()) do
+            if p:IsA("BasePart") then
+                process_part(p)
+            elseif p:IsA("Accessory") then
+                local handle = p:FindFirstChild("Handle")
+                if handle then process_part(handle) end
+            end
+        end
+    elseif instance:IsA("BasePart") then
+        process_part(instance)
+    end
+
+    return min, max, onscreen
+end
+
+-- Criadores de ESP
+function espfunctions.add_box(instance)
+    if not instance or (espinstances[instance] and espinstances[instance].box) then return end
+    local box = {}
+    box.outline = Drawing.new("Square")
+    box.outline.Thickness = 3 box.outline.Filled = false box.outline.Transparency = 1 box.outline.Visible = false
+    box.fill = Drawing.new("Square")
+    box.fill.Thickness = 1 box.fill.Filled = false box.fill.Transparency = 1 box.fill.Visible = false
+    box.corner_fill = {}
+    box.corner_outline = {}
+    for i = 1, 8 do
+        local outline = Drawing.new("Line")
+        outline.Thickness = 3 outline.Transparency = 1 outline.Visible = false
+        local fill = Drawing.new("Line")
+        fill.Thickness = 1 fill.Transparency = 1 fill.Visible = false
+        table.insert(box.corner_fill, fill)
+        table.insert(box.corner_outline, outline)
+    end
+    espinstances[instance] = espinstances[instance] or {}
+    espinstances[instance].box = box
+end
+
+function espfunctions.add_healthbar(instance)
+    if not instance or (espinstances[instance] and espinstances[instance].healthbar) then return end
+    local outline = Drawing.new("Square")
+    outline.Thickness = 1 outline.Filled = true outline.Transparency = 1
+    local fill = Drawing.new("Square")
+    fill.Filled = true fill.Transparency = 1
+    espinstances[instance] = espinstances[instance] or {}
+    espinstances[instance].healthbar = { outline = outline, fill = fill }
+end
+
+function espfunctions.add_name(instance)
+    if not instance or (espinstances[instance] and espinstances[instance].name) then return end
+    local text = Drawing.new("Text")
+    text.Center = true text.Outline = true text.Font = 1 text.Transparency = 1
+    espinstances[instance] = espinstances[instance] or {}
+    espinstances[instance].name = text
+end
+
+function espfunctions.add_distance(instance)
+    if not instance or (espinstances[instance] and espinstances[instance].distance) then return end
+    local text = Drawing.new("Text")
+    text.Center = true text.Outline = true text.Font = 1 text.Transparency = 1
+    espinstances[instance] = espinstances[instance] or {}
+    espinstances[instance].distance = text
+end
+
+function espfunctions.add_tracer(instance)
+    if not instance or (espinstances[instance] and espinstances[instance].tracer) then return end
+    local outline = Drawing.new("Line")
+    outline.Thickness = 3 outline.Transparency = 1
+    local fill = Drawing.new("Line")
+    fill.Thickness = 1 fill.Transparency = 1
+    espinstances[instance] = espinstances[instance] or {}
+    espinstances[instance].tracer = { outline = outline, fill = fill }
+end
+
+-- Render
+RunService.RenderStepped:Connect(function()
+    for instance, data in pairs(espinstances) do
+        if not instance or not instance.Parent then
+            if data.box then
+                data.box.outline:Remove()
+                data.box.fill:Remove()
+                for _, line in ipairs(data.box.corner_fill) do line:Remove() end
+                for _, line in ipairs(data.box.corner_outline) do line:Remove() end
+            end
+            if data.healthbar then data.healthbar.outline:Remove() data.healthbar.fill:Remove() end
+            if data.name then data.name:Remove() end
+            if data.distance then data.distance:Remove() end
+            if data.tracer then data.tracer.outline:Remove() data.tracer.fill:Remove() end
+            espinstances[instance] = nil
+            goto continue
+        end
+
+        if instance:IsA("Model") and not instance.PrimaryPart then goto continue end
+
+        local player = Players:GetPlayerFromCharacter(instance)
+        local death_state = data.death_state or { CurrentFactor = 0, TargetFactor = 0 }
+        local is_dead = false
+        if player then
+            local states = player:FindFirstChild("PlayerStates")
+            local alive_state = states and states:FindFirstChild("Alive")
+            is_dead = (alive_state and (alive_state.Value == 0 or alive_state.Value == false))
+            death_state.TargetFactor = is_dead and 1 or 0
+        end
+        death_state.CurrentFactor = death_state.CurrentFactor + (death_state.TargetFactor - death_state.CurrentFactor) * INTERPOLATION_SPEED
+        data.death_state = death_state
+        local deathFactor = death_state.CurrentFactor
+
+        local min, max, onscreen = get_bounding_box(instance)
+        local current_transparency = esplib.show_dead and 0 or deathFactor
+        local default_color = esplib.box.fill
+        local dead_color = Color3.new(1,0.2,0.2)
+        local box_color = default_color:Lerp(dead_color, deathFactor)
+
+        if player and deathFactor > 0.99 and not esplib.show_dead then
+            if data.box then
+                data.box.outline.Visible = false
+                data.box.fill.Visible = false
+                for _, line in ipairs(data.box.corner_fill) do line.Visible = false end
+                for _, line in ipairs(data.box.corner_outline) do line.Visible = false end
+            end
+            if data.healthbar then data.healthbar.outline.Visible = false data.healthbar.fill.Visible = false end
+            if data.name then data.name.Visible = false end
+            if data.distance then data.distance.Visible = false end
+            if data.tracer then data.tracer.outline.Visible = false data.tracer.fill.Visible = false end
+            goto continue
+        end
+
+        -- Box
+        if data.box and esplib.box.enabled and onscreen then
+            local box = data.box
+            local x, y = min.X, min.Y
+            local w, h = (max - min).X, (max - min).Y
+            local len = math.min(w,h)*0.25
+
+            if esplib.box.type == "normal" then
+                box.outline.Position = min box.outline.Size = max - min box.outline.Color = esplib.box.outline
+                box.outline.Visible = true box.outline.Transparency = current_transparency
+                box.fill.Position = min box.fill.Size = max - min box.fill.Color = box_color
+                box.fill.Visible = true box.fill.Transparency = current_transparency
+                for _, line in ipairs(box.corner_fill) do line.Visible = false end
+                for _, line in ipairs(box.corner_outline) do line.Visible = false end
+            else
+                local corners = {
+                    { Vector2.new(x, y), Vector2.new(x + len, y) }, { Vector2.new(x, y), Vector2.new(x, y + len) },
+                    { Vector2.new(x + w - len, y), Vector2.new(x + w, y) }, { Vector2.new(x + w, y), Vector2.new(x + w, y + len) },
+                    { Vector2.new(x, y + h), Vector2.new(x + len, y + h) }, { Vector2.new(x, y + h - len), Vector2.new(x, y + h) },
+                    { Vector2.new(x + w - len, y + h), Vector2.new(x + w, y + h) }, { Vector2.new(x + w, y + h - len), Vector2.new(x + w, y + h) },
+                }
+                for i = 1,8 do
+                    local o = box.corner_outline[i]
+                    local f = box.corner_fill[i]
+                    local from, to = corners[i][1], corners[i][2]
+                    local dir = (to-from).Unit
+                    o.From = from - dir o.To = to + dir o.Color = esplib.box.outline o.Visible = true o.Transparency = current_transparency
+                    f.From = from f.To = to f.Color = box_color f.Visible = true f.Transparency = current_transparency
+                end
+                box.outline.Visible = false box.fill.Visible = false
+            end
+        elseif data.box then
+            data.box.outline.Visible = false data.box.fill.Visible = false
+            for _, line in ipairs(data.box.corner_fill) do line.Visible = false end
+            for _, line in ipairs(data.box.corner_outline) do line.Visible = false end
+        end
+
+        ::continue::
+    end
+end)
+
+for k,v in pairs(espfunctions) do
+    esplib[k] = v
+end
+
+return esplib
