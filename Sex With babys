@@ -39,7 +39,6 @@ if not esplib then
             outline = Color3.new(0,0,0),
             from = "mouse", -- mouse, head, top, bottom, center
         },
-        -- NOVO TOGGLE: Controla se o ESP deve ser renderizado para jogadores mortos.
         show_dead = false, 
     }
     getgenv().esplib = esplib
@@ -270,21 +269,35 @@ run_service.RenderStepped:Connect(function()
             continue
         end
         
-        -- ** NOVO CÓDIGO: Verificação do estado Alive **
         local player = players:GetPlayerFromCharacter(instance)
         local is_dead = false
+        local death_alpha = 0 -- valor que vai animar de 0 a 1
         
         if player then
             local states = player:FindFirstChild("PlayerStates")
             local alive_state = states and states:FindFirstChild("Alive")
             
-            -- O jogador é considerado 'morto' se Alive for 0 ou false/nil
             is_dead = (alive_state and (alive_state.Value == 0 or alive_state.Value == false))
-        end
         
-        -- Se o jogador estiver morto E o toggle 'show_dead' estiver desligado, oculta todos os visuais e pula.
+            spawn(function()
+                if is_dead then
+                    for i = 0, 1, 0.05 do
+                        death_alpha = i
+                        wait(0.03)
+                    end
+                    death_alpha = 1
+                else
+                    for i = 1, 0, -0.05 do
+                        death_alpha = i
+                        wait(0.03)
+                    end
+                    death_alpha = 0
+                end
+            end)
+        end
+
+        
         if player and is_dead and not esplib.show_dead then
-            -- Oculta Box (normal e corner)
             if data.box then
                 data.box.outline.Visible = false
                 data.box.fill.Visible = false
@@ -292,23 +305,18 @@ run_service.RenderStepped:Connect(function()
                 for _, line in ipairs(data.box.corner_outline) do line.Visible = false end
             end
             
-            -- Oculta Healthbar
             if data.healthbar then
                 data.healthbar.outline.Visible = false
                 data.healthbar.fill.Visible = false
             end
             
-            -- Oculta Name, Distance, Tracer
             if data.name then data.name.Visible = false end
             if data.distance then data.distance.Visible = false end
             if data.tracer then 
                 data.tracer.outline.Visible = false 
                 data.tracer.fill.Visible = false
             end
-            
-            continue -- Pula para a próxima instância
         end
-        -- ** FIM DO NOVO CÓDIGO **
 
         local min, max, onscreen = get_bounding_box(instance)
 
